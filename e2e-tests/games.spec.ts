@@ -1,5 +1,117 @@
 import { test, expect, type Response } from '@playwright/test';
 
+test.describe('Game filters', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+
+  test('filters by one or more categories and clears the selections', async ({ page }) => {
+    const allCards = page.getByTestId('game-card');
+    const categoryInputs = page.getByTestId('category-filter');
+    const categoryIds = await categoryInputs.evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value),
+    );
+    const selectedCategoryIds = categoryIds.slice(0, 2);
+
+    expect(selectedCategoryIds.length).toBe(2);
+    const expectedCount = await allCards.evaluateAll(
+      (cards, selectedIds) =>
+        cards.filter((card) =>
+          selectedIds.includes(card.getAttribute('data-category-id') ?? ''),
+        ).length,
+      selectedCategoryIds,
+    );
+
+    for (const categoryId of selectedCategoryIds) {
+      await page.locator(`[data-testid="category-filter"][value="${categoryId}"]`).check();
+    }
+
+    await expect(page.locator('[data-testid="game-card"]:visible')).toHaveCount(expectedCount);
+    await expect(page.getByTestId('filter-results-status')).toHaveText(
+      `Showing ${expectedCount} of ${await allCards.count()} games.`,
+    );
+
+    await page.getByTestId('clear-game-filters').click();
+    await expect(page.locator('[data-testid="game-card"]:visible')).toHaveCount(
+      await allCards.count(),
+    );
+  });
+
+  test('filters by publisher without selecting a category', async ({ page }) => {
+    const allCards = page.getByTestId('game-card');
+    const publisherFilter = page.getByRole('combobox', { name: 'Publisher' });
+    const publisherIds = await publisherFilter.locator('option').evaluateAll((options) =>
+      options.map((option) => (option as HTMLOptionElement).value).filter(Boolean),
+    );
+    const [publisherId] = publisherIds;
+
+    if (!publisherId) {
+      throw new Error('Publisher filter must include at least one publisher option.');
+    }
+
+    const expectedCount = await allCards.evaluateAll(
+      (cards, selectedPublisherId) =>
+        cards.filter((card) => card.getAttribute('data-publisher-id') === selectedPublisherId)
+          .length,
+      publisherId,
+    );
+
+    await publisherFilter.selectOption(publisherId);
+
+    await expect(page.locator('[data-testid="game-card"]:visible')).toHaveCount(expectedCount);
+    await expect(page.getByTestId('filter-results-status')).toHaveText(
+      `Showing ${expectedCount} of ${await allCards.count()} games.`,
+    );
+  });
+
+  test('combines category and publisher filters', async ({ page }) => {
+    const allCards = page.getByTestId('game-card');
+    const firstCard = allCards.first();
+    const categoryId = await firstCard.getAttribute('data-category-id');
+    const publisherId = await firstCard.getAttribute('data-publisher-id');
+
+    if (!categoryId || !publisherId) {
+      throw new Error('Game cards must expose their category and publisher IDs for filtering.');
+    }
+
+    const expectedCount = await allCards.evaluateAll(
+      (cards, filters) =>
+        cards.filter(
+          (card) =>
+            card.getAttribute('data-category-id') === filters.categoryId &&
+            card.getAttribute('data-publisher-id') === filters.publisherId,
+        ).length,
+      { categoryId, publisherId },
+    );
+
+    await page.locator(`[data-testid="category-filter"][value="${categoryId}"]`).check();
+    await page.getByTestId('publisher-filter').selectOption(publisherId);
+
+    await expect(page.locator('[data-testid="game-card"]:visible')).toHaveCount(expectedCount);
+    await expect(page.getByTestId('filter-results-status')).toHaveText(
+      `Showing ${expectedCount} of ${await allCards.count()} games.`,
+    );
+  });
+
+  test('announces when no games match the selected publisher', async ({ page }) => {
+    const publisherFilter = page.getByRole('combobox', { name: 'Publisher' });
+    const unmatchedPublisherId = 'unmatched-publisher';
+
+    await publisherFilter.evaluate((select, value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = 'Publisher with no games';
+      select.append(option);
+    }, unmatchedPublisherId);
+    await publisherFilter.selectOption(unmatchedPublisherId);
+
+    await expect(page.locator('[data-testid="game-card"]:visible')).toHaveCount(0);
+    await expect(page.getByTestId('filter-results-status')).toHaveText(
+      'No games match these filters.',
+    );
+  });
+});
+
 test.describe('Game Listing and Navigation', () => {
   test('should display games with titles on index page', async ({ page }) => {
     await test.step('Navigate to homepage', async () => {
